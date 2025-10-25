@@ -1,106 +1,99 @@
 import streamlit as st
 
 def parse_instruction(instr):
-    """Parse a single instruction string into structured dict."""
+    """Parse a single instruction string (e.g., 'lw$t0,0') into a structured dict."""
+    instr = instr.strip()
     if not instr:
         return None
-    # Normalize: insert space before '$' and split by commas/spaces
+    # Fix: insert space before '$' to split opcode from register
     normalized = instr.replace('$', ' $').replace(',', ' ')
     parts = normalized.split()
-    if not parts:
-        return None
+    if len(parts) < 1:
+        return {'type': 'invalid'}
     op = parts[0]
     try:
         if op == 'add' or op == 'sub':
+            if len(parts) < 4:
+                return {'type': 'invalid'}
             rd, rs, rt = parts[1], parts[2], parts[3]
             return {'type': op, 'rd': rd, 'rs': rs, 'rt': rt}
         elif op == 'lw':
+            if len(parts) < 2:
+                return {'type': 'invalid'}
             rd = parts[1]
             return {'type': 'lw', 'rd': rd}
         elif op == 'sw':
+            if len(parts) < 2:
+                return {'type': 'invalid'}
             rs = parts[1]
             return {'type': 'sw', 'rs': rs}
         else:
             return {'type': 'unknown'}
-    except IndexError:
+    except Exception:
         return {'type': 'invalid'}
 
 def count_stalls(parsed_instructions):
     stalls = 0
-    n = len(parsed_instructions)
-    for i in range(n - 1):
+    for i in range(len(parsed_instructions) - 1):
         curr = parsed_instructions[i]
-        next_instr = parsed_instructions[i + 1]
+        nxt = parsed_instructions[i + 1]
         if curr['type'] == 'lw':
             loaded_reg = curr['rd']
-            # Check if next instruction reads loaded_reg
-            reads_it = False
-            if next_instr['type'] in ('add', 'sub'):
-                if next_instr['rs'] == loaded_reg or next_instr['rt'] == loaded_reg:
-                    reads_it = True
-            elif next_instr['type'] == 'sw':
-                if next_instr['rs'] == loaded_reg:
-                    reads_it = True
-            if reads_it:
-                stalls += 1
+            # Check if next instruction reads this register
+            if nxt['type'] in ('add', 'sub'):
+                if nxt['rs'] == loaded_reg or nxt['rt'] == loaded_reg:
+                    stalls += 1
+            elif nxt['type'] == 'sw':
+                if nxt['rs'] == loaded_reg:
+                    stalls += 1
     return stalls
 
 # Streamlit UI
 st.set_page_config(page_title="MIPS Load-Use Hazard Detector", layout="centered")
 st.title("🔍 MIPS Load-Use Hazard Detector")
 st.markdown("""
-This tool analyzes a sequence of up to 6 simplified MIPS instructions  
-and counts **stall cycles** caused by **Load-Use data hazards**.
+Enter your MIPS program below (one instruction per line, up to 6 instructions).  
+Include `END` on its own line to stop input (as per the lab spec).
 """)
 
-# Instruction inputs
-instructions = []
-st.subheader("Enter Instructions (max 6)")
-cols = st.columns(6)
-for i in range(6):
-    instr = cols[i].text_input(f"Instruction {i+1}", key=f"instr_{i}", placeholder="e.g., lw$t0,0")
-    if instr:
-        instructions.append(instr)
+# Single multi-line input
+user_input = st.text_area(
+    "Enter instructions (e.g., lw$t0,0 → add$t2,$t0,$t3 → END)",
+    height=200,
+    placeholder="lw$t0,0\nadd$t2,$t0,$t3\nEND"
+)
 
-# Early END option
-if st.checkbox("✅ Stop early (simulate 'END')"):
-    pass  # We'll just use non-empty instructions
-
-# Remove empty strings
-instructions = [instr.strip() for instr in instructions if instr.strip()]
-
-# Validate: only allow up to 6, and stop at first empty (simulate END)
-final_instructions = []
-for instr in instructions:
-    if instr.upper() == "END":
-        break
-    final_instructions.append(instr)
-    if len(final_instructions) >= 6:
-        break
-
-# Process
 if st.button("Analyze Hazards"):
-    if not final_instructions:
-        st.success("Total Stalls: 0")
-    else:
-        # Parse
-        parsed = []
-        valid_instructions = []
-        for instr in final_instructions:
-            p = parse_instruction(instr)
-            if p and p['type'] != 'invalid':
-                parsed.append(p)
-                valid_instructions.append(instr)
-            else:
-                st.warning(f"⚠️ Skipping invalid instruction: `{instr}`")
+    lines = user_input.strip().split('\n')
+    final_instructions = []
+    for line in lines:
+        clean_line = line.strip()
+        if clean_line.upper() == "END":
+            break
+        if clean_line:  # skip empty lines
+            final_instructions.append(clean_line)
+        if len(final_instructions) >= 6:
+            break
 
-        if not parsed:
-            st.success("Total Stalls: 0")
+    # Parse valid instructions
+    parsed = []
+    valid_raw = []
+    for raw in final_instructions:
+        p = parse_instruction(raw)
+        if p and p['type'] not in ('invalid', 'unknown'):
+            parsed.append(p)
+            valid_raw.append(raw)
         else:
-            stalls = count_stalls(parsed)
-            st.success(f"Total Stalls: {stalls}")
+            st.warning(f"⚠️ Skipped invalid instruction: `{raw}`")
 
-            # Optional: show debug info
-            with st.expander("View parsed instructions"):
-                for i, (raw, p) in enumerate(zip(valid_instructions, parsed)):
-                    st.write(f"{i+1}. `{raw}` → {p}")
+    # Count stalls
+    total_stalls = count_stalls(parsed) if parsed else 0
+    st.success(f"Total Stalls: {total_stalls}")
+
+    # Optional debug view
+    with st.expander("Parsed Instructions"):
+        if valid_raw:
+            for raw, p in zip(valid_raw, parsed):
+                st.write(f"`{raw}` → {p}")
+        else:
+            st.write("No valid instructions.")
